@@ -1,0 +1,445 @@
+# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
+
+import logging
+
+import numpy as np
+from classy_vision.generic.distributed_util import get_world_size
+from fvcore.common.file_io import PathManager
+from torch.utils.data import Dataset
+from vissl.data import dataset_catalog
+from vissl.data.ssl_transforms import get_transform
+from vissl.utils.env import get_machine_local_and_dist_rank
+import os
+from PIL import Image
+import torch
+import copy
+import scipy.io as sio
+from pycocotools.coco import COCO
+from pycocotools import mask as COCO_mask
+from vissl.utils.io import load_file
+import warnings
+import scipy.ndimage as ndimage
+from skimage.morphology import thin
+
+def _convert_lbl_to_long(lbl):
+    """
+    if the labels are int32, we convert them to int64 since pytorch
+    needs a long (int64) type for labels to index. See
+    https://discuss.pytorch.org/t/runtimeerror-expected-object-of-scalar-type-long-but-got-scalar-type-float-when-using-crossentropyloss/30542/5  # NOQA
+    """
+    out_lbl = lbl
+    if isinstance(lbl, np.ndarray) and (lbl.dtype == np.int32):
+        out_lbl = lbl.astype(np.int64)
+    elif isinstance(lbl, list):
+        out_lbl = [_convert_lbl_to_long(item) for item in lbl]
+    elif isinstance(lbl, np.int32):
+        out_lbl = out_lbl.astype(np.int64)
+    return out_lbl
+
+
+class AuxSSLDataset(Dataset):
+    """
+    Auxiliary Self Supervised Learning Dataset Class.
+
+    The AuxSSLDataset class is defined to support reading data
+    from multiple data sources. For example: data = [dataset1, dataset2]
+    and the minibatches generated will have the corresponding data
+    from each dataset.
+
+    For this reason, we also support labels from multiple sources. For example
+    targets = [dataset1 targets, dataset2 targets].
+
+    In order to support multiple data sources, the dataset configuration
+    always has list inputs.
+        - DATA_SOURCES, LABEL_SOURCES, DATASET_NAMES, DATA_PATHS, LABEL_PATHS
+
+    For several data sources, we also support specifying on what dataset the
+    transforms should be applied. By default, apply the transforms
+    on data from all datasets.
+
+    Args:
+        cfg (AttrDict): configuration defined by user
+        split (str): the dataset split for which we are constructing the Dataset object
+        dataset_source_map (Dict[str, Callable]): The dictionary that maps
+                    what data sources are supported and what object to use to read
+                    data from those sources. For example:
+                    DATASET_SOURCE_MAP = {
+                        "disk_filelist": DiskImageDataset,
+                        "disk_folder": DiskImageDataset,
+                        "synthetic": SyntheticImageDataset,
+                    }
+    """
+    CAT_LIST = [0, 5, 2, 16, 9, 44, 6, 3, 17, 62, 21, 67, 18, 19, 4,
+                1, 64, 20, 63, 7, 72]
+
+    def __init__(self, cfg, split, dataset_source_map):
+        self.split = split
+        self.cfg = cfg
+        self.data_objs = []
+        self.label_objs = []
+        self.data_paths = []
+        self.label_paths = []
+        self.do_semseg = self.cfg["DATA"][split].get("DO_SEMSEG", False)
+        self.do_nyud_semseg = self.cfg["DATA"][split].get("DO_NYUD_SEMSEG", False)
+        self.do_depth = self.cfg["DATA"][split].get("DO_DEPTH", False)
+        self.batchsize_per_replica = self.cfg["DATA"][split]["BATCHSIZE_PER_REPLICA"]
+        self.data_sources = self.cfg["DATA"][split].DATA_SOURCES
+        self.label_sources = self.cfg["DATA"][split].LABEL_SOURCES
+        self.dataset_names = self.cfg["DATA"][split].DATASET_NAMES
+        self.label_type = self.cfg["DATA"][split].LABEL_TYPE
+        self.transform = get_transform(self.cfg["DATA"][split].TRANSFORMS)
+        self._labels_init = False
+        self._verify_data_sources(split, dataset_source_map)
+
+        # Check if we use a partly labeled split
+        if ("LABEL_PERCENTAGE" in self.cfg["DATA"][split]) and "train" in split.lower() and not self.cfg["DATA"][split].get("USE_ALL_IMAGES", False):
+            print("Using a subset of the labeled images")
+            if self.cfg["DATA"][split]["LABEL_PERCENTAGE"] in [100, 50, 20, 10, 5, 2, 1, 0]:
+                self._get_data_files(split, self.cfg["DATA"][split]["LABEL_PERCENTAGE"])
+            else:
+                raise ValueError("Currently only supporting splits of 100, 50, 20, 10, 5, 2, 1, 0% of the labeles and not {}".format(self.cfg["DATA"][split]["LABEL_PERCENTAGE"]))
+        else:
+            self._get_data_files(split)
+        if len(self.label_sources) > 0 and len(self.label_paths) > 0:
+            assert len(self.label_sources) == len(self.label_paths), (
+                f"len(label_sources) != len(label paths) "
+                f"{len(self.label_sources)} vs. {len(self.label_paths)}"
+            )
+
+        new_data_paths = []
+        self.semseg_paths = []
+        self.semseg_nyud_paths = []
+        self.depth_paths = []
+        for dataset_id in range(len(self.data_paths)):
+            if self.dataset_names[dataset_id] == 'augsslvoc2012_folder':
+                if not os.path.exists(self.label_paths[dataset_id]):
+                    raise ValueError(
+                        'Label text file {} not found'.format(self.label_paths[dataset_id]))
+                with open(os.path.join(self.label_paths[dataset_id]), "r") as f:
+                    file_names = [os.path.join(self.data_paths[dataset_id], x.strip() + '.jpg') for x in f.readlines()]
+                with open(os.path.join(self.label_paths[dataset_id]), "r") as f:
+                    semseg_folder = self.data_paths[dataset_id].replace('JPEGImages', 'SegmentationClassAug')
+                    semseg_path = []
+                    for x in f.readlines():
+                        semseg_label_path = os.path.join(semseg_folder, x.strip() + '.png')
+                        # Currently do not need this check
+                        semseg_path.append(semseg_label_path)
+                if not os.path.exists(self.label_paths[dataset_id].replace('.txt', '.npy')):
+                    np.save(self.label_paths[dataset_id].replace('.txt', '.npy'), file_names)
+                new_data_paths.append(self.label_paths[dataset_id].replace('.txt', '.npy'))
+                self.semseg_paths.append(semseg_path)
+
+            elif self.dataset_names[dataset_id] == 'nyud_folder':
+                if not os.path.exists(self.label_paths[dataset_id]):
+                    raise ValueError(
+                        'Label text file {} not found'.format(self.label_paths[dataset_id]))
+                with open(os.path.join(self.label_paths[dataset_id]), "r") as f:
+                    file_names = [os.path.join(self.data_paths[dataset_id], x.strip() + '.jpg') for x in f.readlines()]
+                with open(os.path.join(self.label_paths[dataset_id]), "r") as f:
+                    depth_folder = self.data_paths[dataset_id].replace('images', 'depth')
+                    depth_path = []
+                    semseg_path = []
+                    for x in f.readlines():
+                        depth_label_path = os.path.join(depth_folder, x.strip() + '.mat')
+                        depth_path.append(depth_label_path)
+                        semseg_path.append(depth_label_path.replace('depth', 'segmentation'))
+                if not os.path.exists(self.label_paths[dataset_id].replace('.txt', '.npy')):
+                    np.save(self.label_paths[dataset_id].replace('.txt', '.npy'), file_names)
+                new_data_paths.append(self.label_paths[dataset_id].replace('.txt', '.npy'))
+                self.depth_paths.append(depth_path)
+                self.semseg_nyud_paths.append(semseg_path)
+
+            else:
+                new_data_paths.append(self.data_paths[dataset_id])
+        self.data_paths = new_data_paths
+        for idx in range(len(self.data_sources)):
+            datasource_cls = dataset_source_map[self.data_sources[idx]]
+            self.data_objs.append(
+                datasource_cls(
+                    cfg=self.cfg,
+                    path=self.data_paths[idx],
+                    split=split,
+                    dataset_name=self.dataset_names[idx],
+                    data_source=self.data_sources[idx],
+                )
+            )
+
+    def _verify_data_sources(self, split, dataset_source_map):
+        """
+        For each data source, verify that the specified data source
+        is supported in VISSL. See DATASET_SOURCE_MAP for what sources
+        are supported.
+        """
+        for idx in range(len(self.data_sources)):
+            assert self.data_sources[idx] in dataset_source_map, (
+                f"Unknown data source: {self.data_sources[idx]}, supported: "
+                f"{list(dataset_source_map.keys())}"
+            )
+
+    def _get_data_files(self, split, label_percentage=None):
+        """
+        Get the given dataset split (train or test), get the path to the dataset
+        (images and labels).
+        1. If the user has explicitly specified the data_sources, we simply
+           use those and don't do lookup in the datasets registered with VISSL
+           from the dataset catalog.
+        2. If the user hasn't specified the path, look for the dataset in
+           the datasets catalog registered with VISSL. For a given list of datasets
+           and a given partition (train/test), we first verify that we have the
+           dataset and the correct source as specified by the user.
+           Then for each dataset in the list, we get the data path (make sure it
+           exists, sources match). For the label file, the file is optional.
+        """
+        local_rank, _ = get_machine_local_and_dist_rank()
+        self.data_paths, self.label_paths = dataset_catalog.get_data_files(
+            split, dataset_config=self.cfg["DATA"]
+        )
+        if label_percentage is not None:
+            for ind, label_path in enumerate(self.label_paths):
+                self.label_paths[ind] = label_path.replace(".txt", "_{}.txt".format(label_percentage))
+
+        logging.info(
+            f"Rank: {local_rank} split: {split} Data files:\n{self.data_paths}"
+        )
+        logging.info(
+            f"Rank: {local_rank} split: {split} Label files:\n{self.label_paths}"
+        )
+
+    def load_single_label_file(self, path: str):
+        """
+        Load the single data file. We only support user specifying the numpy label
+        files if user is specifying a data_filelist source of labels.
+
+        To save memory, if the mmap_mode is set to True for loading, we try to load
+        the images in mmap_mode. If it fails, we simply load the labels without mmap
+        """
+        assert PathManager.isfile(path), f"Path to labels {path} is not a file"
+        assert path.endswith("npy"), "Please specify a numpy file for labels"
+        if self.cfg["DATA"][self.split].MMAP_MODE:
+            try:
+                with PathManager.open(path, "rb") as fopen:
+                    labels = np.load(fopen, allow_pickle=True, mmap_mode="r")
+            except ValueError as e:
+                logging.info(f"Could not mmap {path}: {e}. Trying without PathManager")
+                labels = np.load(path, allow_pickle=True, mmap_mode="r")
+                logging.info("Successfully loaded without PathManager")
+            except Exception:
+                logging.info("Could not mmap without PathManager. Trying without mmap")
+                with PathManager.open(path, "rb") as fopen:
+                    labels = np.load(fopen, allow_pickle=True)
+        else:
+            with PathManager.open(path, "rb") as fopen:
+                labels = np.load(fopen, allow_pickle=True)
+        return labels
+
+    def _convert_to_numeric_ids(self, labels: np.ndarray) -> np.ndarray:
+        """
+        VISSL disk_filelist support targets as strings or integers
+
+        In case of strings, VISSL has to translate them into integers so that
+        each integer corresponds to an index
+        """
+        if isinstance(labels[0], str):
+            unique_labels = sorted(set(labels))
+            label_to_id = {label: idx for idx, label in enumerate(unique_labels)}
+            return np.array([label_to_id[label] for label in labels])
+        else:
+            return labels
+
+    def _load_labels(self):
+        """
+        Load the labels if the dataset has labels. In self-supervised
+        pre-training task, we don't use labels. However, we use labels for the
+        evaluations of the self-supervised models on the downstream tasks.
+
+        For labels, two label sources are supported: disk_filelist and disk_folder
+
+        In case of disk_filelist, we iteratively read labels for each specified file.
+        See load_single_label_file().
+        In case of disk_folder, we use the ImageFolder object created during the
+        data loading itself.
+        """
+        local_rank, _ = get_machine_local_and_dist_rank()
+        for idx, label_source in enumerate(self.label_sources):
+            if label_source == "disk_filelist":
+                paths = self.label_paths[idx]
+                # in case of filelist, we support multiple label files.
+                # we rely on the user to have a proper collator to handle
+                # the multiple labels
+                logging.info(f"Loading labels: {paths}")
+                if isinstance(paths, list):
+                    labels = []
+                    for path in paths:
+                        path_labels = self.load_single_label_file(path)
+                        labels.append(path_labels)
+                else:
+                    labels = self.load_single_label_file(paths)
+                    labels = self._convert_to_numeric_ids(labels)
+            elif label_source == "disk_folder":
+                # In this case we use the labels inferred from the directory structure
+                # We enforce that the data source also be a disk folder in this case
+                assert self.data_sources[idx] == self.label_sources[idx]
+                if local_rank == 0:
+                    logging.info(
+                        f"Using {label_source} labels from {self.data_paths[idx]}"
+                    )
+                # Use the ImageFolder object created when loading images.
+                # We do not create it again since it can be an expensive operation.
+                labels = [x[1] for x in self.data_objs[idx].image_dataset.samples]
+                labels = np.array(labels).astype(np.int64)
+            elif label_source == "torchvision_dataset":
+                labels = np.array(self.data_objs[idx].get_labels()).astype(np.int64)
+            else:
+                raise ValueError(f"unknown label source: {label_source}")
+            self.label_objs.append(labels)
+
+    def __getitem__(self, idx):
+        """
+        Get the input sample for the minibatch for a specified data index.
+        For each data object (if we are loading several datasets in a minibatch),
+        we get the sample: consisting of {
+            - image data,
+            - label (if applicable) otherwise idx
+            - data_valid: 0 or 1 indicating if the data is valid image
+            - data_idx : index of the data in the dataset for book-keeping and debugging
+        }
+
+        Once the sample data is available, we apply the data transform on the sample.
+
+        The final transformed sample is returned to be added into the minibatch.
+        """
+        if not self._labels_init and len(self.label_sources) > 0:
+            self._load_labels()
+            self._labels_init = True
+        item = {"data": [], "data_valid": [], "data_idx": []}
+        _img_size = []
+        for source in self.data_objs:
+            data, valid = source[idx]
+            _img_size.append(data.size)
+            item["data"].append(data)
+            item["data_idx"].append(idx)
+            item["data_valid"].append(1 if valid else -1)
+
+        # There are three types of label_type (data labels): "standard",
+        # "sample_index", and "zero". "standard" uses the labels associated
+        # with a data set (e.g. directory names). "sample_index" assigns each
+        # sample a label that corresponds to that sample's index in the
+        # dataset (first sample will have label == 0, etc.), and is used for
+        # SSL tasks in which the label is arbitrary. "zero" assigns
+        # each sample the label == 0, which is necessary when using the
+        # CutMixUp collator because of the label smoothing that is built in
+        # to its functionality.
+        if (len(self.label_objs) > 0) or self.label_type == "standard":
+            item["label"] = []
+            for source in self.label_objs:
+                if isinstance(source, list):
+                    lbl = [entry[idx] for entry in source]
+                else:
+                    lbl = _convert_lbl_to_long(source[idx])
+                item["label"].append(lbl)
+        elif self.label_type == "sample_index":
+            item["label"] = []
+            for _ in range(len(self.data_objs)):
+                item["label"].append(idx)
+        elif self.label_type == "zero":
+            item["label"] = []
+            for _ in range(len(self.data_objs)):
+                item["label"].append(0)
+        else:
+            raise ValueError(f"Unknown label type: {self.label_type}")
+
+        if self.do_semseg:
+            item["semseg"], item["img_name"] = self._load_semseg(idx, _img_size)
+
+        if self.do_nyud_semseg:
+            item["semseg"] = self._load_nyud_semseg(idx, _img_size)
+
+        if self.do_depth:
+            item["depth"], item["img_name"] = self._load_depth(idx, _img_size)
+
+        # apply the transforms on the image
+        if self.transform:
+            item = self.transform(item)
+        return item
+
+    def __len__(self):
+        """
+        Size of the dataset. Assumption made there is only one
+        data source
+        """
+        return len(self.data_objs[0])
+
+    def _load_semseg(self, index, dimensions):
+        semseg_list = []
+        semseg_name = []
+        for ind, paths in enumerate(self.semseg_paths):
+            if paths[index] is not None:
+                _semseg = np.array(Image.open(paths[index])).astype(np.float32)
+            else:
+                _semseg = np.array(Image.new(mode='L', size=dimensions[ind], color=255)).astype(np.float32)
+            _semseg = Image.fromarray(_semseg)
+            semseg_list.append(_semseg)
+            semseg_name.append(paths[index].split('/')[-1].replace('.png', ''))
+
+        return semseg_list, semseg_name
+
+    def _load_nyud_semseg(self, index, dimensions):
+        semseg_list = []
+        for ind, paths in enumerate(self.semseg_nyud_paths):
+            _semseg = np.array(sio.loadmat(paths[index])['segmentation']).astype(np.float32)
+            _semseg = Image.fromarray(_semseg)
+            semseg_list.append(_semseg)
+        return semseg_list
+
+    def _load_depth(self, index, dimensions):
+        depth_list = []
+        depth_name = []
+        for ind, paths in enumerate(self.depth_paths):
+            _depth = np.array(sio.loadmat(paths[index])['depth']).astype(np.float32)
+            _depth = Image.fromarray(_depth)
+            depth_list.append(_depth)
+            depth_name.append(paths[index].split('/')[-1].replace('.mat', ''))
+
+        return depth_list, depth_name
+
+    def get_image_paths(self):
+        """
+        Get the image paths for all the data sources.
+
+        Return:
+            image_paths (List[List[str]]): list containing image paths list for each
+                                            data source.
+        """
+        image_paths = []
+        for source in self.data_objs:
+            image_paths.append(source.get_image_paths())
+        return image_paths
+
+    def get_available_splits(self, dataset_config):
+        """
+        Get the available splits in the dataset confir. Not specific to this split
+        for which the SSLDataset is being constructed.
+
+        NOTE: this is deprecated method.
+        """
+        return [key for key in dataset_config if key.lower() in ["train", "test"]]
+
+    def num_samples(self, source_idx=0):
+        """
+        Size of the dataset. Assumption made there is only one
+        data source
+        """
+        return len(self.data_objs[source_idx])
+
+    def get_batchsize_per_replica(self):
+        """
+        Get the batch size per trainer
+        """
+        # this searches for batchsize_per_replica in self and then in self.dataset
+        return getattr(self, "batchsize_per_replica", 1)
+
+    def get_global_batchsize(self):
+        """
+        The global batch size across all the trainers
+        """
+        return self.get_batchsize_per_replica() * get_world_size()

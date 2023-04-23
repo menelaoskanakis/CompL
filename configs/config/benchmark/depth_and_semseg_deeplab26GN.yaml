@@ -1,0 +1,113 @@
+# @package _global_
+config:
+  VERBOSE: False
+  LOG_FREQUENCY: 100
+  TEST_ONLY: False
+  TEST_EVERY_NUM_EPOCH: 5
+  TEST_MODEL: True
+  SEED_VALUE: 1
+  MULTI_PROCESSING_METHOD: forkserver
+  HOOKS:
+    PERF_STATS:
+      MONITOR_PERF_STATS: False
+  DATA:
+    NUM_DATALOADER_WORKERS: 8
+    TRAIN:
+      DO_DEPTH: true
+      DO_NYUD_SEMSEG: true
+#      LABEL_PERCENTAGE: 50
+      DATA_SOURCES: [disk_filelist]
+      DATASET_NAMES: [nyud_folder]
+      BATCHSIZE_PER_REPLICA: 8
+      TRANSFORMS:
+        - name: RandomScalingDense
+          min_scale_factor: 0.5
+          max_scale_factor: 2.0
+          step_size: 0.25
+        - name: RandomCropDense
+          size: [425, 560]
+        - name: RandomHorizontalFlipDense
+          p: 0.5
+        - name: ToTensorDense
+        - name: Normalize
+          mean: [0.485, 0.456, 0.406]
+          std: [0.229, 0.224, 0.225]
+      MMAP_MODE: True
+      COPY_TO_LOCAL_DISK: False
+    TEST:
+      DO_DEPTH: true
+      DO_NYUD_SEMSEG: true
+      DATA_SOURCES: [disk_filelist]
+      DATASET_NAMES: [nyud_folder]
+      BATCHSIZE_PER_REPLICA: 8
+      TRANSFORMS:
+        - name: PadImageDense
+          size: [425, 560]
+        - name: ToTensorDense
+        - name: Normalize
+          mean: [0.485, 0.456, 0.406]
+          std: [0.229, 0.224, 0.225]
+      MMAP_MODE: True
+      COPY_TO_LOCAL_DISK: False
+  SUPERVISED_METERS:
+    name: depth
+    enable_training_meter: false
+    depth:
+      do_rmse: True
+      do_log_rmse: True
+  SUPERVISED_METERS_2:
+    name: mean_iou
+    enable_training_meter: false
+    mean_iou:
+      n_classes: 41
+  TRAINER:
+    TRAIN_STEP_NAME: depth_semseg_train_step
+  TASKS: [depth, semseg]
+  TASKS_WEIGHTS: [1., 1.]
+  MODEL:
+    MTL: True
+    TRUNK:
+      NAME: deeplabv3plus_resnet
+      TRUNK_PARAMS:
+        RESNETS:
+          DEPTH: 26
+          NORM_LAYERS: 'GroupNorm'
+#          PRETRAINED: True
+#          PRETRAINED_PATH: './pretrained_models/'
+    HEAD:
+      PARAMS: [
+      [
+        ["dense_head", {"conv_dims": [256, 1], "img_dims": [425, 560]}]
+      ],
+      [
+        ["dense_head", {"conv_dims": [256, 41], "img_dims": [425, 560]}]
+      ]
+      ]
+  SUPERVISED_LOSS:
+      name: L1MaskedLossDepth
+  SUPERVISED_LOSS_2:
+      name: CrossEntropyLoss
+      params:
+        ignore_index: 255
+  OPTIMIZER:
+      name: sgd
+      weight_decay: 0.0001
+      momentum: 0.9
+      num_epochs: 200
+      param_schedulers:
+        lr:
+          name: polynomial
+          base_value: 0.005
+          num_epochs: 200
+          power: 0.9
+          update_interval: step
+  DISTRIBUTED:
+    BACKEND: nccl           # set to "gloo" for cpu only trianing
+    NUM_NODES: 1            # no change needed
+    NUM_PROC_PER_NODE: 1    # user sets this to number of gpus to use
+    INIT_METHOD: tcp        # set to "file" if desired
+    RUN_ID: auto            # Set to file_path if using file method. No change needed for tcp and a free port on machine is automatically detected.
+  MACHINE:
+    DEVICE: gpu
+  CHECKPOINT:
+    DIR: "./results/"

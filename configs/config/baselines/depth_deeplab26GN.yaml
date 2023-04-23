@@ -1,0 +1,94 @@
+# @package _global_
+config:
+  VERBOSE: False
+  LOG_FREQUENCY: 100
+  TEST_ONLY: False
+  TEST_EVERY_NUM_EPOCH: 16
+  TEST_MODEL: True
+  SEED_VALUE: 1
+  MULTI_PROCESSING_METHOD: forkserver
+  HOOKS:
+    PERF_STATS:
+      MONITOR_PERF_STATS: False
+  DATA:
+    NUM_DATALOADER_WORKERS: 8
+    TRAIN:
+      DO_DEPTH: true
+#      LABEL_PERCENTAGE: 50
+      DATA_SOURCES: [disk_filelist]
+      DATASET_NAMES: [nyud_folder]
+      BATCHSIZE_PER_REPLICA: 8
+      TRANSFORMS:
+        - name: RandomScalingDense
+          min_scale_factor: 0.5
+          max_scale_factor: 2.0
+          step_size: 0.25
+        - name: RandomCropDense
+          size: [425, 560]
+        - name: RandomHorizontalFlipDense
+          p: 0.5
+        - name: ToTensorDense
+        - name: Normalize
+          mean: [0.485, 0.456, 0.406]
+          std: [0.229, 0.224, 0.225]
+      MMAP_MODE: True
+      COPY_TO_LOCAL_DISK: False
+    TEST:
+      DO_DEPTH: true
+      DATA_SOURCES: [disk_filelist]
+      DATASET_NAMES: [nyud_folder]
+      BATCHSIZE_PER_REPLICA: 8
+      TRANSFORMS:
+        - name: PadImageDense
+          size: [425, 560]
+        - name: ToTensorDense
+        - name: Normalize
+          mean: [0.485, 0.456, 0.406]
+          std: [0.229, 0.224, 0.225]
+      MMAP_MODE: True
+      COPY_TO_LOCAL_DISK: False
+  METERS:
+    name: depth
+    enable_training_meter: false
+    depth:
+      do_rmse: True
+      do_log_rmse: True
+  TRAINER:
+    TRAIN_STEP_NAME: depth_train_step
+  TASKS: depth
+  MODEL:
+    MTL: True
+    TRUNK:
+      NAME: deeplabv3plus_resnet
+      TRUNK_PARAMS:
+        RESNETS:
+          DEPTH: 26
+          NORM_LAYERS: 'GroupNorm'
+#          PRETRAINED: True
+#          PRETRAINED_PATH: './pretrained_models/'
+    HEAD:
+      PARAMS: [["dense_head", {"conv_dims": [256, 1], "img_dims": [425, 560]}]]
+  SUPERVISED_LOSS:
+    name: L1MaskedLossDepth
+  OPTIMIZER:
+      name: sgd
+      weight_decay: 0.0001
+      momentum: 0.9
+      num_epochs: 200
+      param_schedulers:
+        lr:
+          name: polynomial
+          base_value: 0.005
+          num_epochs: 200
+          power: 0.9
+          update_interval: step
+  MACHINE:
+    DEVICE: gpu
+  DISTRIBUTED:
+    BACKEND: nccl
+    NUM_NODES: 1
+    NUM_PROC_PER_NODE: 1
+    INIT_METHOD: tcp
+    RUN_ID: auto
+  CHECKPOINT:
+    DIR: "./results/"

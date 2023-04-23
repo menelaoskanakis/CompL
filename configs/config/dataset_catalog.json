@@ -1,0 +1,142 @@
+{
+    "imagenet1k_folder": {
+        "train": ["/vissl/data/ImageNet/train", "/vissl/data/ImageNet/train"],
+        "val": ["/vissl/data/ImageNet/val", "/vissl/data/ImageNet/val"]
+    },
+    "imagenette_160_folder": {
+        "train": ["<img_path>", "<lbl_path>"],
+        "val": ["<img_path>", "<lbl_path>"]
+    },
+    "places205_folder": {
+        "train": ["<img_path>", "<lbl_path>"],
+        "val": ["<img_path>", "<lbl_path>"]
+    },
+    "places365_folder": {
+        "train": ["<img_path>", "<lbl_path>"],
+        "val": ["<img_path>", "<lbl_path>"]
+    },
+    "CIFAR10": {
+        "train": ["<path_to_pytorch_dataset>", "<unused>"],
+        "val": ["<path_to_pytorch_dataset>", "<unused>"]
+    },
+    "CIFAR100": {
+        "train": ["<path_to_pytorch_dataset>", "<unused>"],
+        "val": ["<path_to_pytorch_dataset>", "<unused>"]
+    },
+    "STL10": {
+        "train": ["<path_to_pytorch_dataset>", "<unused>"],
+        "val": ["<path_to_pytorch_dataset>", "<unused>"]
+    },
+    "MNIST": {
+        "train": ["<path_to_pytorch_dataset>", "<unused>"],
+        "val": ["<path_to_pytorch_dataset>", "<unused>"]
+    },
+    "SVHN": {
+        "train": ["<path_to_pytorch_dataset>", "<unused>"],
+        "val": ["<path_to_pytorch_dataset>", "<unused>"]
+    },
+    "inaturalist2018_folder": {
+        "train": ["<img_path>", "<lbl_path>"],
+        "val": ["<img_path>", "<lbl_path>"]
+    },
+    "yfcc100m": {
+        "train": ["<img_path>", "<lbl_path>"],
+        "val": ["<img_path>", "<lbl_path>"]
+    },
+    "clevr_count_filelist": {
+        "train": ["<path_to_train_images.npy>", "<path_to_train_labels.npy>"],
+        "val": ["<path_to_val_images.npy>", "<path_to_val_labels.npy>"]
+    },
+    "clevr_dist_filelist": {
+        "train": ["<path_to_train_images.npy>", "<path_to_train_labels.npy>"],
+        "val": ["<path_to_val_images.npy>", "<path_to_val_labels.npy>"]
+    },
+    "dsprites_loc_folder": {
+        "train": ["<img_path>", "<lbl_path>"],
+        "val": ["<img_path>", "<lbl_path>"]
+    },
+    "dsprites_orient_folder": {
+        "train": ["<img_path>", "<lbl_path>"],
+        "val": ["<img_path>", "<lbl_path>"]
+    },
+    "euro_sat_folder": {
+        "train": ["<img_path>", "<lbl_path>"],
+        "val": ["<img_path>", "<lbl_path>"]
+    },
+    "food101_folder": {
+        "train": ["<img_path>", "<lbl_path>"],
+        "val": ["<img_path>", "<lbl_path>"]
+    },
+    "kitti_dist_folder": {
+        "train": ["<img_path>", "<lbl_path>"],
+        "val": ["<img_path>", "<lbl_path>"]
+    },
+    "pcam_folder": {
+        "train": ["<img_path>", "<lbl_path>"],
+        "val": ["<img_path>", "<lbl_path>"]
+    },
+    "small_norb_azimuth_folder": {
+        "train": ["<img_path>", "<lbl_path>"],
+        "val": ["<img_path>", "<lbl_path>"]
+    },
+    "small_norb_elevation_folder": {
+        "train": ["<img_path>", "<lbl_path>"],
+        "val": ["<img_path>", "<lbl_path>"]
+    },
+    "stanford_cars_folder": {
+        "train": ["<img_path>", "<lbl_path>"],
+        "val": ["<img_path>", "<lbl_path>"]
+    },
+    "ucf101_folder": {
+        "train": ["<img_path>", "<lbl_path>"],
+        "val": ["<img_path>", "<lbl_path>"]
+    },
+    "voc2007_folder": {
+        "train": ["<root_folder>", "<root_folder>"],
+        "val": ["<root_folder>", "<root_folder>"]
+    },
+    "voc2012_folder": {
+        "train": ["<root_folder>", "<root_folder>"],
+        "val": ["<root_folder>", "<root_folder>"]
+    },
+    "augsslvoc2012_folder": {
+        "train": ["./data/VOC/VOCdevkit/VOC2012/JPEGImages", "./data/VOC/VOCdevkit/VOC2012/ImageSets/SegmentationAug/train.txt"],
+        "val": ["./data/VOC/VOCdevkit/VOC2012/JPEGImages", "./data/VOC/VOCdevkit/VOC2012/ImageSets/SegmentationAug/val.txt"]
+    },
+    "BDD100Kvoc2012_folder": {
+        "train": ["./data/bdd100k/images/10k/train", "./data/bdd100k/labels/sem_seg/masks/train.txt"],
+        "val": ["./data/bdd100k/images/10k/val", "./data/bdd100k/labels/sem_seg/masks/val.txt"]
+    },
+    "COCO2017voc2012_folder": {
+        "train": ["./data/COCO/images/train2017", "./data/COCO/annotations/instances_train2017.json"],
+        "val": ["./data/COCO/images/val2017", "./data/COCO/annotations/instances_val2017.json"]
+    },
+    "nyud_folder": {
+        "train": ["./data/NYUD_MT/images", "./data/NYUD_MT/gt_sets/train.txt"],
+        "val": ["./data/NYUD_MT/images", "./data/NYUD_MT/gt_sets/val.txt"]
+    },
+    "BSDS500": {
+        "train": ["./data/BSR/BSDS500/data", "./data/BSR/BSDS500/train.txt"],
+        "val": ["./data/BSR/BSDS500/data", "./data/BSR/BSDS500/test.txt"]
+    },
+    "coco_folder": {
+        "train": ["<root_folder>", "<root_folder>"],
+        "val": ["<root_folder>", "<root_folder>"]
+    },
+    "imagenet1k-per01": {
+        "train": ["<img_path>", "<lbl_path>"],
+        "val": ["<img_path>", "<lbl_path>"]
+    },
+    "imagenet1k-per10": {
+        "train": ["<img_path>", "<lbl_path>"],
+        "val": ["<img_path>", "<lbl_path>"]
+    },
+    "google-imagenet1k-per01": {
+        "train": ["<img_path>", "<lbl_path>"],
+        "val": ["<img_path>", "<lbl_path>"]
+    },
+    "google-imagenet1k-per10": {
+        "train": ["<img_path>", "<lbl_path>"],
+        "val": ["<img_path>", "<lbl_path>"]
+    }
+}

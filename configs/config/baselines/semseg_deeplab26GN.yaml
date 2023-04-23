@@ -1,0 +1,98 @@
+# @package _global_
+config:
+  VERBOSE: False
+  LOG_FREQUENCY: 100
+  TEST_ONLY: False
+  TEST_EVERY_NUM_EPOCH: 1
+  TEST_MODEL: True
+  SEED_VALUE: 1
+  MULTI_PROCESSING_METHOD: forkserver
+  HOOKS:
+    PERF_STATS:
+      MONITOR_PERF_STATS: False
+  DATA:
+    NUM_DATALOADER_WORKERS: 8
+    TRAIN:
+      DO_SEMSEG: true
+#      LABEL_PERCENTAGE: 50
+      DATA_SOURCES: [disk_filelist]
+      DATASET_NAMES: [augsslvoc2012_folder]
+      BATCHSIZE_PER_REPLICA: 8
+      TRANSFORMS:
+        - name: RandomScalingDense
+          min_scale_factor: 0.5
+          max_scale_factor: 2.0
+          step_size: 0.25
+        - name: RandomCropDense
+          size: 512
+        - name: RandomHorizontalFlipDense
+          p: 0.5
+        - name: ToTensorDense
+        - name: Normalize
+          mean: [0.485, 0.456, 0.406]
+          std: [0.229, 0.224, 0.225]
+      MMAP_MODE: True
+      COPY_TO_LOCAL_DISK: False
+    TEST:
+      DO_SEMSEG: true
+      DATA_SOURCES: [disk_filelist]
+      DATASET_NAMES: [augsslvoc2012_folder]
+      BATCHSIZE_PER_REPLICA: 8
+      TRANSFORMS:
+        - name: PadImageDense
+          size: 512
+        - name: ToTensorDense
+        - name: Normalize
+          mean: [0.485, 0.456, 0.406]
+          std: [0.229, 0.224, 0.225]
+      MMAP_MODE: True
+      COPY_TO_LOCAL_DISK: False
+  METERS:
+    name: mean_iou
+    enable_training_meter: false
+    mean_iou:
+      n_classes: 21
+  TRAINER:
+    TRAIN_STEP_NAME: semseg_train_step
+  TASKS: semseg
+  MODEL:
+    MTL: True
+    TRUNK:
+      NAME: deeplabv3plus_resnet
+      TRUNK_PARAMS:
+        RESNETS:
+          DEPTH: 26
+          NORM_LAYERS: 'GroupNorm'
+#          PRETRAINED: True
+#          PRETRAINED_PATH: './pretrained_models/'
+    HEAD:
+      PARAMS: [["dense_head", {"conv_dims": [256, 21], "img_dims": [512, 512]}]]
+    AMP_PARAMS:
+      USE_AMP: True
+      AMP_ARGS: {"opt_level": "O1"}
+  SUPERVISED_LOSS:
+      name: CrossEntropyLoss
+      params:
+        ignore_index: 255
+  OPTIMIZER:
+      name: sgd
+      weight_decay: 0.0001
+      momentum: 0.9
+      num_epochs: 60
+      param_schedulers:
+        lr:
+          name: polynomial
+          base_value: 0.001
+          num_epochs: 60
+          power: 0.9
+          update_interval: step
+  MACHINE:
+    DEVICE: gpu
+  DISTRIBUTED:
+    BACKEND: nccl
+    NUM_NODES: 1
+    NUM_PROC_PER_NODE: 1
+    INIT_METHOD: tcp
+    RUN_ID: auto
+  CHECKPOINT:
+    DIR: "./results/"

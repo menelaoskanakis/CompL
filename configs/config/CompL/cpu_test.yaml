@@ -1,0 +1,154 @@
+# @package _global_
+config:
+  VERBOSE: False
+  LOG_FREQUENCY: 100
+  TEST_ONLY: False
+  TEST_EVERY_NUM_EPOCH: 4
+  TEST_MODEL: True
+  SEED_VALUE: 1
+  MULTI_PROCESSING_METHOD: forkserver
+  HOOKS:
+    PERF_STATS:
+      MONITOR_PERF_STATS: False
+  DATA:
+    NUM_DATALOADER_WORKERS: 1
+    TRAIN:
+      DO_DEPTH: true
+#      LABEL_PERCENTAGE: 50
+      DATA_SOURCES: [disk_filelist]
+      DATASET_NAMES: [nyud_folder]
+      BATCHSIZE_PER_REPLICA: 2
+      TRANSFORMS:
+        - name: RandomScalingDense
+          min_scale_factor: 0.5
+          max_scale_factor: 2.0
+          step_size: 0.25
+        - name: RandomCropDense
+          size: [64, 64]
+        - name: RandomHorizontalFlipDense
+          p: 0.5
+        - name: ToTensorDense
+        - name: Normalize
+          mean: [0.485, 0.456, 0.406]
+          std: [0.229, 0.224, 0.225]
+      MMAP_MODE: True
+      COPY_TO_LOCAL_DISK: False
+    TRAIN_SS:
+      USE_STATEFUL_DISTRIBUTED_SAMPLER: false
+      REMOVE_IMG_PATH_PREFIX: ''
+      NEW_IMG_PATH_PREFIX: ''
+      DATA_PATHS: []
+      LABEL_SOURCES: []
+      LABEL_PATHS: []
+      DEFAULT_GRAY_IMG_SIZE: 224
+      COLLATE_FUNCTION_PARAMS: {}
+      DATA_LIMIT: -1
+      INPUT_KEY_NAMES: ['data']
+      TARGET_KEY_NAMES: ['label']
+      ENABLE_QUEUE_DATASET: false
+      DO_DEPTH: false
+
+      DATA_SOURCES: [disk_filelist]
+      DATASET_NAMES: [nyud_folder]
+      BATCHSIZE_PER_REPLICA: 4
+      LABEL_TYPE: sample_index    # just an implementation detail. Label isn't used
+      TRANSFORMS:
+        - name: ImgReplicatePilWCropDense
+          num_times: 2
+          patch_scale: 0.5
+          patch_distance: 8
+        - name: RandomCropDense
+          size: [64, 64]
+        - name: ImgPilColorDistortion
+          strength: 0.5
+        - name: ImgPilGaussianBlur
+          p: 0.5
+          radius_min: 0.1
+          radius_max: 2.0
+        - name: RandomHorizontalFlip
+          p: 0.5
+        - name: ToTensor
+        - name: Normalize
+          mean: [0.485, 0.456, 0.406]
+          std: [0.229, 0.224, 0.225]
+      COLLATE_FUNCTION: moco_collator
+      MMAP_MODE: True
+      COPY_TO_LOCAL_DISK: False
+      COPY_DESTINATION_DIR: /tmp/imagenet1k/
+      DROP_LAST: True
+    TEST:
+      DO_DEPTH: true
+      DATA_SOURCES: [disk_filelist]
+      DATASET_NAMES: [nyud_folder]
+      BATCHSIZE_PER_REPLICA: 4
+      TRANSFORMS:
+        - name: RandomCropDense
+          size: [64, 64]
+        - name: ToTensorDense
+        - name: Normalize
+          mean: [0.485, 0.456, 0.406]
+          std: [0.229, 0.224, 0.225]
+      MMAP_MODE: True
+      COPY_TO_LOCAL_DISK: False
+  TRAINER:
+    TRAIN_STEP_NAME: depth_densecl_train_step
+  TASKS: [depth, self_supervised]
+  TASKS_WEIGHTS: [1.0, 1.0]
+  METERS:
+    name: ""
+  SUPERVISED_METERS:
+    name: depth
+    enable_training_meter: false
+    depth:
+      do_rmse: True
+      do_log_rmse: True
+  MODEL:
+    MTL: True
+    TRUNK:
+      NAME: deeplabv3plus_resnet
+      TRUNK_PARAMS:
+        RESNETS:
+          DEPTH: 26
+          NORM_LAYERS: 'GroupNorm'
+    HEAD:
+      PARAMS: [
+      [
+        ["dense_head", {"conv_dims": [256, 1], "img_dims": [64, 64]}]
+      ],
+      [
+        ["densecl_head", {"dims": [256, 128], "num_grid": 8}]
+      ]
+      ]
+  LOSS:
+      name: densecl_loss
+      densecl_loss:
+        embedding_dim: 128
+        queue_size: 65536
+        momentum: 0.999
+        temperature: 0.4
+        loss_lambda: 0.7
+        dataset_name: nyud
+  SUPERVISED_LOSS:
+    name: L1MaskedLossDepth
+  OPTIMIZER:
+      name: sgd
+      weight_decay: 0.0001
+      momentum: 0.9
+      num_epochs: 200
+      param_schedulers:
+        lr:
+          name: polynomial
+          base_value: 0.005
+          num_epochs: 200
+          power: 0.9
+          update_interval: step
+  MACHINE:
+    DEVICE: cpu
+  DISTRIBUTED:
+    BACKEND: gloo
+    NUM_NODES: 1
+    NUM_PROC_PER_NODE: 1
+    INIT_METHOD: tcp
+    RUN_ID: auto
+  CHECKPOINT:
+    DIR: "./results/"
